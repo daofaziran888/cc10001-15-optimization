@@ -72,6 +72,45 @@
       </form>
     </div>
 
+    <!-- 跨模块同步：批次分发状态（数据分发模块回写） -->
+    <section class="dispatch-sync" data-testid="dispatch-sync-panel">
+      <header class="page-head">
+        <div>
+          <h3>批次分发状态</h3>
+          <p class="page-desc">
+            数据分发模块按「批次 × 通道 × 输出格式」去重后的回写结果；
+            待续传通道可到「数据分发」页面执行通道续传，已完成通道不会被覆盖。
+          </p>
+        </div>
+        <div class="page-actions">
+          <button class="btn ghost" data-testid="dispatch-sync-refresh" type="button" @click="reloadDispatchStatus">刷新分发状态</button>
+        </div>
+      </header>
+      <table class="data-table" data-testid="dispatch-sync-table">
+        <thead>
+          <tr>
+            <th>批次</th><th>批次编号</th><th>分发状态</th><th>已完成通道</th>
+            <th>重复跳过</th><th>待续传通道</th><th>未覆盖通道</th><th>有效产物</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="status in dispatchStatuses" :key="status.batch_id" :data-testid="`dispatch-sync-row-${status.batch_id}`">
+            <td>#{{ status.batch_id }}</td>
+            <td>{{ status.batch_code ?? '—' }}</td>
+            <td><span class="sync-badge" :class="batchStatusClass(status.status)">{{ status.status }}</span></td>
+            <td>{{ status.completed_channels }}</td>
+            <td>{{ status.skipped_channels }}</td>
+            <td>{{ status.failed_channels }}</td>
+            <td>{{ status.pending_channels.length }}</td>
+            <td>{{ status.file_count }}</td>
+          </tr>
+          <tr v-if="!dispatchStatuses.length">
+            <td colspan="8" class="empty-state">暂无批次分发状态，可先到数据分发页面执行分发</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
     <footer class="page-foot">
       <span>共 {{ total }} 条采集仓储记录</span>
       <span v-if="errorMessage" class="error-text">{{ errorMessage }}</span>
@@ -86,7 +125,19 @@ import { request } from '@/api/client'
 
 type Row = Record<string, string | number | null>
 
+type BatchDispatchStatus = {
+  batch_id: number
+  batch_code: string | null
+  status: string
+  completed_channels: number
+  skipped_channels: number
+  failed_channels: number
+  pending_channels: unknown[]
+  file_count: number
+}
+
 const ENDPOINT = '/api/result_store'
+const PIPELINE = '/api/pipeline'
 const columns = ["批次编号", "关联任务", "原始行数", "有效行数", "存储路径", "压缩格式", "校验摘要", "落地时间"]
 const actions = ["触发校验", "标记通过", "标记失败"]
 const statuses = ["接收中", "已落盘", "校验通过", "校验失败"]
@@ -100,11 +151,28 @@ const filterFields = columns.slice(0, 3)
 const showCreate = ref(false)
 const creating = ref(false)
 const createValues = ref<Record<string, string>>({})
+const dispatchStatuses = ref<BatchDispatchStatus[]>([])
 const stats = computed(() => [
   { label: metricNames[0], value: total.value },
   { label: metricNames[1], value: rows.value.filter((row) => row.status === statuses[1]).length },
   { label: metricNames[2], value: rows.value.filter((row) => row.status === statuses[statuses.length - 1]).length },
 ])
+
+function batchStatusClass(status: string): string {
+  if (status === '全部完成') return 'sync-done'
+  if (status === '无可用通道') return 'sync-skip'
+  return 'sync-pending'
+}
+
+async function reloadDispatchStatus() {
+  try {
+    const response = await request(`${PIPELINE}/dispatch/batch-status`)
+    if (!response.ok) throw new Error('批次分发状态读取失败')
+    dispatchStatuses.value = (await response.json()) as BatchDispatchStatus[]
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '批次分发状态读取失败'
+  }
+}
 
 function resetFilters() {
   filters.value = {}
@@ -184,5 +252,37 @@ async function reload() {
   }
 }
 
-onMounted(reload)
+onMounted(() => {
+  void reload()
+  void reloadDispatchStatus()
+})
 </script>
+
+<style scoped>
+.dispatch-sync {
+  margin-top: 20px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.sync-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.sync-done {
+  background: #dcfce7;
+  color: #15803d;
+}
+.sync-skip {
+  background: #f1f5f9;
+  color: #64748b;
+}
+.sync-pending {
+  background: #fef3c7;
+  color: #b45309;
+}
+</style>

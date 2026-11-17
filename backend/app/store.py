@@ -23,7 +23,8 @@ class Store:
             "pipeline_state": [],      # 流水线执行状态与产物
             "audit_records": [],       # 质量审计记录
             "sync_positions": [],      # 增量同步水位
-            "dispatch_logs": [],       # 数据分发日志
+            "dispatch_logs": [],       # 数据分发日志（按批次×通道×格式去重）
+            "dispatch_files": [],      # 分发产物文件（同一批次×通道×格式只保留一份有效文件）
             "proxy_assignments": [],   # 代理分配记录
             "cookie_rotations": [],    # 凭证轮换记录
             "scheduler_triggers": [],  # 调度触发记录
@@ -99,6 +100,22 @@ class Store:
             if int(row.get("id", 0)) == record_id:
                 return row
         return None
+
+    def joint_find_by(self, key: str, match: dict[str, Any]) -> dict[str, Any] | None:
+        """按字段组合查找联合表记录，用于批次×通道×格式这类业务唯一键去重。"""
+        for row in self.joint_rows(key):
+            if all(row.get(field) == value for field, value in match.items()):
+                return row
+        return None
+
+    def joint_update(self, key: str, record_id: int, values: dict[str, Any]) -> dict[str, Any] | None:
+        """原地更新联合表记录并落盘；续传只改状态，不会覆盖已完成通道的产物。"""
+        record = self.joint_find(key, record_id)
+        if record is None:
+            return None
+        record.update(values)
+        self._save_joint(key)
+        return record
 
     def joint_clear(self, key: str) -> None:
         self._joint[key] = []
